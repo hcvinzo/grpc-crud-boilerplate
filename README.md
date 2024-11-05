@@ -93,8 +93,20 @@ The API supports both gRPC and REST endpoints through HTTP/JSON transcoding. Ava
 Key configuration files:
 
 ```csharp:appsettings.Development.json
-startLine: 1
-endLine: 14
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "Grpc": "Information"
+    }
+  },
+  "Jwt": {
+    "Key": "6166123c8fc4be6e600db6fd0f81788fb50c4aacbde28124f7afaee2144e00b9f0d66818f3af9a967d1ec508e53e3104729ef07101685c1507a4bb9a5bb4fee55a2e9aed4f60d4b23b347636b2bb8ac5abd11dd6a8e57233cba01dd264687b26d6aa1427efcd711350c516edc1fe9e001cdfb19f4704e26cfbefd9ddc5ca662e53b3625d36b3a321bc80e860587d03d2e563e8d80f184a6bc42a1fa6316a9ca234fb0724a7cef751b2d2887b53655b0525b7e47da22fb9caf9f02f7bdf011a2f0b6cde302db547598e43bc1f5c64382bdcc4ed60ff37057ca6733fd7281dfa96eb0c6134a9613f083bd9446cab0aeeedfdc504fd4f689bc0f0316ea1889620b7",
+    "Issuer": "GrpcCrudBoilerplate",
+    "Audience": "YourAudience"
+  }
+}
 ```
 
 ## Security
@@ -115,8 +127,13 @@ The project implements several security best practices:
 Structured logging is implemented using Serilog with multiple sinks:
 
 ```csharp:Program.cs
-startLine: 22
-endLine: 28
+Log.Logger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .Enrich.With<CorrelationIdEnricher>()
+    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj} {Properties:j}{NewLine}{Exception}")
+    .WriteTo.File("logs/GrpcCrudBoilerplate-.txt", rollingInterval: RollingInterval.Day,
+        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {CorrelationId} {Message:lj}{NewLine}{Exception}")
+    .CreateLogger();
 ```
 
 ## Contributing
