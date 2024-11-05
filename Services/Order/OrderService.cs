@@ -9,19 +9,45 @@ namespace GrpcCrudBoilerplate.Services.Order;
 
 public interface IOrderService
 {
+    /// <summary>
+    /// Create Orders
+    /// </summary>
+    /// <param name="orderDtos"></param>
+    /// <returns></returns>
     Task<List<OrderDto>> CreateOrders(List<OrderDto> orderDtos);
+
+    /// <summary>
+    /// Retrieve Orders from given criteria
+    /// </summary>
+    /// <param name="startDate"></param>
+    /// <param name="endDate"></param>
+    /// <param name="includeItems"></param> 
+    /// <returns></returns>
     Task<List<OrderDto>> RetrieveOrders(DateTime? startDate = null, DateTime? endDate = null, bool includeItems = false);
+
+    /// <summary>
+    /// Retrieve Order by Id
+    /// </summary>
+    /// <param name="id"></param>
+    /// <returns></returns>
     Task<OrderDto?> GetOrderById(int id);
+
+    /// <summary>
+    /// Update Order
+    /// </summary>
+    Task<OrderDto> UpdateOrder(int id, OrderDto orderDto);
 }
 
 public class OrderService : IOrderService
 {
+    private readonly IOrderRepository _orderRepository;
     private readonly AppDbContext _dbContext;
     private readonly IMapper _mapper;
     private readonly IUserContext _userContext;
     private readonly IAuthorizationService _authorizationService;
-    public OrderService(AppDbContext dbContext, IMapper mapper, IUserContext userContext, IAuthorizationService authorizationService)
+    public OrderService(IOrderRepository orderRepository, AppDbContext dbContext, IMapper mapper, IUserContext userContext, IAuthorizationService authorizationService)
     {
+        _orderRepository = orderRepository;
         _dbContext = dbContext;
         _mapper = mapper;
         _userContext = userContext;
@@ -38,28 +64,24 @@ public class OrderService : IOrderService
         // Ensure the user has the necessary permission
         await _authorizationService.EnsurePermission(_userContext.UserId, "Order.Create");
 
-        var orders = new List<DataContext.Entities.Order>();
+        // Map DTOs to entities
+        var orders = _mapper.Map<List<DataContext.Entities.Order>>(orderDtos);
 
-        foreach (var orderDto in orderDtos)
+        foreach (var order in orders)
         {
-            var order = _mapper.Map<DataContext.Entities.Order>(orderDto);
-
-            order.CreatedBy = order.UpdatedBy = _userContext.UserId;
-
-            // Set creation and update timestamps
             order.CreatedAt = DateTime.UtcNow;
             order.UpdatedAt = DateTime.UtcNow;
+            order.CreatedBy = _userContext.UserId;
+            order.UpdatedBy = _userContext.UserId;
 
-            // Calculate total amount from order items
+            // Calculate total amount
             order.Amount = order.Items.Sum(item => item.Quantity * item.UnitPrice);
-
-            orders.Add(order);
         }
 
-        await _dbContext.Orders.AddRangeAsync(orders);
-        await _dbContext.SaveChangesAsync();
+        // Add entities to the database
+        var createdOrders = await _orderRepository.AddRangeAsync(orders);
 
-        return _mapper.Map<List<OrderDto>>(orders);
+        return _mapper.Map<List<OrderDto>>(createdOrders);
     }
 
     /// <summary>
@@ -74,38 +96,14 @@ public class OrderService : IOrderService
         // Ensure the user has the necessary permission
         await _authorizationService.EnsurePermission(_userContext.UserId, ["Order.ViewAny", "Order.ViewOwn"]);
 
-        var query = _dbContext.Orders
-            .Include(o => o.Creator)
-            .Include(o => o.Updater)
-            .AsQueryable();
+        // Determine the user ID to filter by based on their permissions
+        int? userId = await _authorizationService.HasPermission(_userContext.UserId, "Order.ViewAny") ? null : (int?)_userContext.UserId;
 
-        // Include items only if requested
-        if (includeItems)
-        {
-            query = query.Include(o => o.Items);
-        }
-
-        // Apply date filters if provided
-        if (startDate.HasValue)
-        {
-            query = query.Where(o => o.CreatedAt >= startDate.Value);
-        }
-
-        if (endDate.HasValue)
-        {
-            query = query.Where(o => o.CreatedAt <= endDate.Value);
-        }
-
-        // Filter by user if the user has only "Order.ViewOwn" permission
-        if (!await _authorizationService.HasPermission(_userContext.UserId, "Order.ViewAny"))
-        {
-            query = query.Where(o => o.CreatedBy == _userContext.UserId);
-        }
+        var orders = await _orderRepository.GetOrdersByDateRangeAsync(startDate, endDate, includeItems, userId);
 
         // Order by creation date descending (newest first)
-        query = query.OrderByDescending(o => o.CreatedAt);
+        orders = orders.OrderByDescending(o => o.CreatedAt).ToList();
 
-        var orders = await query.ToListAsync();
         return _mapper.Map<List<OrderDto>>(orders);
     }
 
@@ -119,21 +117,67 @@ public class OrderService : IOrderService
         // Ensure the user has the necessary permission
         await _authorizationService.EnsurePermission(_userContext.UserId, ["Order.ViewAny", "Order.ViewOwn"]);
 
-        var order = await _dbContext.Orders
-            .Include(o => o.Items)
-            .Include(o => o.Creator)
-            .Include(o => o.Updater)
-            .FirstOrDefaultAsync(o => o.Id == id);
+        // Determine the user ID to filter by based on their permissions
+        int? userId = await _authorizationService.HasPermission(_userContext.UserId, "Order.ViewAny") ? null : (int?)_userContext.UserId;
 
-        // Filter by user if the user has only "Order.ViewOwn" permission
-        if (!await _authorizationService.HasPermission(_userContext.UserId, "Order.ViewAny"))
-        {
-            order = order?.CreatedBy == _userContext.UserId ? order : null;
-        }
+        var order = await _orderRepository.GetOrderWithDetailsAsync(id, userId);
 
         if (order == null)
             return null;
 
         return _mapper.Map<OrderDto>(order);
     }
+
+    /// <summary>
+    /// Update Order
+    /// </summary>
+    /// <param name="id"></param>
+    /// <param name="orderDto"></param>
+    /// <returns></returns>
+    /// <exception cref="ArgumentException"></exception>
+    /// <exception cref="UnauthorizedAccessException"></exception>
+    public async Task<OrderDto> UpdateOrder(int id, OrderDto orderDto)
+    {
+        // Ensure the user has the necessary permission
+        await _authorizationService.EnsurePermission(_userContext.UserId, ["Order.UpdateAny", "Order.UpdateOwn"]);
+
+        // Determine if user can update any order or only their own
+        int? userId = await _authorizationService.HasPermission(_userContext.UserId, "Order.UpdateAny")
+            ? null
+            : (int?)_userContext.UserId;
+
+        // Get existing order with details
+        var existingOrder = await _orderRepository.GetOrderWithDetailsAsync(id, userId);
+
+        if (existingOrder == null)
+        {
+            throw new ArgumentException($"Order with ID {id} not found or you don't have permission to update it");
+        }
+
+        // Update order properties
+        existingOrder.UpdatedAt = DateTime.UtcNow;
+        existingOrder.UpdatedBy = _userContext.UserId;
+
+        // Update items
+        existingOrder.Items.Clear();
+        foreach (var itemDto in orderDto.Items)
+        {
+            existingOrder.Items.Add(new OrderItem
+            {
+                ProductName = itemDto.ProductName,
+                Quantity = itemDto.Quantity,
+                UnitPrice = itemDto.UnitPrice,
+                Order = existingOrder
+            });
+        }
+
+        // Calculate total amount
+        existingOrder.Amount = existingOrder.Items.Sum(item => item.Quantity * item.UnitPrice);
+
+        // Update the order
+        await _orderRepository.UpdateAsync(existingOrder);
+
+        return _mapper.Map<OrderDto>(existingOrder);
+    }
+
 }
