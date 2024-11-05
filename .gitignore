@@ -1,0 +1,14 @@
+# .NET Core
+bin/
+obj/
+
+# VS Code
+.vscode/
+.vscode/*
+
+# macOS generated files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+[Ll]ogs/

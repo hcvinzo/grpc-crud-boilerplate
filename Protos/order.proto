@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+option csharp_namespace = "GrpcCrudBoilerplate.v1";
+
+package greet.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+service Order {
+  rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse) {
+    option (google.api.http) = {
+      post: "/v1/orders"
+      body: "*"
+    };
+  }
+
+  rpc GetOrder (GetOrderRequest) returns (GetOrderResponse) {
+    option (google.api.http) = {
+      get: "/v1/orders/{id}"
+    };
+  }
+}
+
+message CreateOrderRequest {
+  repeated OrderItem items = 1;
+}
+
+message OrderItem {
+  string product_name = 1;
+  double quantity = 2;
+  double unit_price = 3;
+  double total_price = 4;
+}
+
+message CreateOrderResponse {
+  int32 id = 1;
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Timestamp updated_at = 3;
+  double amount = 4;
+  repeated OrderItem items = 5;
+}
+
+message GetOrderRequest {
+  int32 id = 1;
+}
+
+message GetOrderResponse {
+  int32 id = 1;
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Timestamp updated_at = 3;
+  double amount = 4;
+  repeated OrderItem items = 5;
+  string creator_username = 6;
+  string updater_username = 7;
+}
